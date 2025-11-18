@@ -111,7 +111,7 @@ export class AuditService {
       ]);
 
       return {
-        logs,
+        logs: logs as unknown as IAuditLog[],
         total,
         page,
         pages: Math.ceil(total / limit),
@@ -137,7 +137,7 @@ export class AuditService {
         .sort({ created_at: -1 })
         .lean();
       
-      return logs;
+      return logs as unknown as IAuditLog[];
     } catch (error) {
       logger.error('Error getting resource audit trail:', error);
       throw error;
@@ -188,7 +188,7 @@ export class AuditService {
       return {
         total_actions: logs.length,
         actions_by_type,
-        recent_activity: logs,
+        recent_activity: logs as unknown as IAuditLog[],
       };
     } catch (error) {
       logger.error('Error getting user activity summary:', error);

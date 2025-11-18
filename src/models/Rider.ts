@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IRider extends Document {
+export interface IRider extends Document<any, any, any> {
   _id: string;
   name: string;
   phone: string;

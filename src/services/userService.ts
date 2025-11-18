@@ -259,7 +259,7 @@ export class UserService {
    */
   private static formatUserResponse(user: IUser): UserResponse {
     return {
-      id: user._id.toString(),
+      id: (user as any)._id?.toString() || '',
       email: user.email,
       role: user.role,
       first_name: user.first_name,

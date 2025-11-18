@@ -4,6 +4,7 @@ import { CloudinaryService } from '../config/cloudinary';
 import { logger } from '../utils/logger';
 import { CustomError, validationError } from '../middleware/errorHandler';
 import { cleanTagsForStorage } from '../utils/tagFormatter';
+import multer from 'multer';
 
 export interface CreateProductData {
   name: string;
@@ -349,8 +350,9 @@ export class ProductService {
    * Format product response to ensure clean tags
    */
   static formatProductResponse(product: IProduct): any {
+    const productObj = (product as any).toObject ? (product as any).toObject() : product;
     return {
-      ...product.toObject(),
+      ...productObj,
       tags: product.tags ? cleanTagsForStorage(product.tags) : [],
     };
   }

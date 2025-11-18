@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import { ProductService } from '../services/productService';
 import { AuditService } from '../services/auditService';
 import { uploadMultiple, uploadJsonFile } from '../middleware/upload';
@@ -53,7 +54,7 @@ router.post('/', uploadMultiple('images', 5), async (req: Request, res: Response
     await AuditService.logCreate(
       req,
       'PRODUCT',
-      product._id.toString(),
+      (product as any)._id?.toString() || '',
       product.name
     );
 
@@ -201,7 +202,7 @@ router.put('/:id', uploadMultiple('images', 5), async (req: Request, res: Respon
     await AuditService.logUpdate(
       req,
       'PRODUCT',
-      product._id.toString(),
+      (product as any)._id?.toString() || '',
       product.name,
       oldProduct,
       product
@@ -233,7 +234,7 @@ router.delete('/:id', async (req: Request, res: Response, next: NextFunction) =>
       await AuditService.logDelete(
         req,
         'PRODUCT',
-        product._id.toString(),
+        (product as any)._id?.toString() || '',
         product.name,
         product
       );
@@ -502,11 +503,11 @@ router.post('/tags/normalize', authenticate, async (req: Request, res: Response,
           
           // Only update if tags actually changed
           if (JSON.stringify(originalTags.sort()) !== JSON.stringify(normalizedTags.sort())) {
-            await ProductService.updateProduct(product._id.toString(), { tags: normalizedTags });
+            await ProductService.updateProduct((product as any)._id?.toString() || '', { tags: normalizedTags });
             updatedCount++;
             
             updates.push({
-              productId: product._id.toString(),
+              productId: (product as any)._id?.toString() || '',
               sku: product.sku,
               originalTags,
               normalizedTags
@@ -523,7 +524,7 @@ router.post('/tags/normalize', authenticate, async (req: Request, res: Response,
           
           if (JSON.stringify(originalTags.sort()) !== JSON.stringify(normalizedTags.sort())) {
             updates.push({
-              productId: product._id.toString(),
+              productId: (product as any)._id?.toString() || '',
               sku: product.sku,
               originalTags,
               normalizedTags

@@ -32,6 +32,7 @@ import publicCatalogRoutes from './routes/publicCatalog';
 import customerOrderRoutes from './routes/customerOrders';
 import autoCompleteRoutes from './routes/autoComplete';
 import notificationRoutes from './routes/notifications';
+import wholesalerRoutes from './routes/wholesalers';
 import { CronService } from './services/cronService';
 import { SchedulerService } from './services/schedulerService';
 import { auditMiddleware, auditAuth } from './middleware/audit';
@@ -193,6 +194,7 @@ class App {
           customer_orders: '/api/v1/admin/customer-orders',
           auto_complete: '/api/v1/auto-complete',
           notifications: '/api/v1/notifications',
+          wholesalers: '/api/v1/wholesalers',
         },
       });
     });
@@ -219,6 +221,7 @@ class App {
     this.app.use(`${apiPrefix}/admin/customer-orders`, customerOrderRoutes);
     this.app.use(`${apiPrefix}/auto-complete`, autoCompleteRoutes);
     this.app.use(`${apiPrefix}/notifications`, notificationRoutes);
+    this.app.use(`${apiPrefix}/wholesalers`, wholesalerRoutes);
     // this.app.use(`${apiPrefix}/monitoring`, monitoringRoutes);
 
     // Root endpoint

@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface ITransaction extends Document {
+export interface ITransaction extends Document<any, any, any> {
   _id: string;
   store_id: string;
   customer_id?: string;

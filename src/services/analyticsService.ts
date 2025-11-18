@@ -1696,7 +1696,12 @@ export class AnalyticsService {
 
       while (cursor <= endLocal) {
         const periodKey = formatDateForTimezone(cursor, timezone);
-        const entry = resultsMap.get(periodKey) || { period: periodKey, revenue: 0, transactions: 0 };
+        const existingEntry = resultsMap.get(periodKey);
+        const entry: { period: string; revenue: number; transactions: number } = existingEntry ? {
+          period: existingEntry.period,
+          revenue: existingEntry.revenue,
+          transactions: existingEntry.transactions
+        } : { period: periodKey, revenue: 0, transactions: 0 };
         filled.push(entry);
         cursor.setDate(cursor.getDate() + 1);
       }

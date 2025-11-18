@@ -408,7 +408,7 @@ export class NotificationService {
         .limit(limit)
         .lean();
 
-      return notifications;
+      return notifications as unknown as INotification[];
     } catch (error) {
       logger.error('Error getting user notifications:', error);
       throw error;

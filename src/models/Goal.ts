@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IGoal extends Document {
+export interface IGoal extends Document<any, any, any> {
   _id: string;
   user_id: string;
   store_id: string;

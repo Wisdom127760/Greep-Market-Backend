@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IExpense extends Document {
+export interface IExpense extends Document<any, any, any> {
   _id: string;
   store_id: string;
   date: Date;

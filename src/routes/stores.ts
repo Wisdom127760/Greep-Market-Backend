@@ -44,7 +44,7 @@ router.get('/for-assignment', asyncHandler(async (req, res) => {
     
     // Return simplified store data for assignment dropdowns
     const assignmentStores = stores.map(store => ({
-      id: store.id,
+      id: (store as any)._id?.toString() || (store as any).id || '',
       name: store.name,
       address: store.address,
       is_active: store.is_active

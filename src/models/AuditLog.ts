@@ -1,12 +1,12 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IAuditLog extends Document {
+export interface IAuditLog extends Document<any, any, any> {
   _id: string;
   user_id: string;
   user_email: string;
   user_role: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'LOGOUT' | 'EXPORT' | 'IMPORT';
-  resource_type: 'PRODUCT' | 'TRANSACTION' | 'EXPENSE' | 'USER' | 'INVENTORY' | 'GOAL';
+  resource_type: 'PRODUCT' | 'TRANSACTION' | 'EXPENSE' | 'USER' | 'INVENTORY' | 'GOAL' | 'WHOLESALER';
   resource_id: string;
   resource_name?: string;
   changes?: {
@@ -37,7 +37,7 @@ const auditLogSchema = new Schema<IAuditLog>({
   user_role: {
     type: String,
     required: true,
-    enum: ['admin', 'manager', 'cashier'],
+    enum: ['admin', 'manager', 'cashier', 'system'],
   },
   action: {
     type: String,
@@ -47,7 +47,7 @@ const auditLogSchema = new Schema<IAuditLog>({
   resource_type: {
     type: String,
     required: true,
-    enum: ['PRODUCT', 'TRANSACTION', 'EXPENSE', 'USER', 'INVENTORY', 'GOAL'],
+    enum: ['PRODUCT', 'TRANSACTION', 'EXPENSE', 'USER', 'INVENTORY', 'GOAL', 'WHOLESALER'],
   },
   resource_id: {
     type: String,

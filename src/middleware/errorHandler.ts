@@ -16,7 +16,9 @@ export class CustomError extends Error implements AppError {
     this.statusCode = statusCode;
     this.isOperational = isOperational;
 
-    Error.captureStackTrace(this, this.constructor);
+    if ((Error as any).captureStackTrace) {
+      (Error as any).captureStackTrace(this, this.constructor);
+    }
   }
 }
 

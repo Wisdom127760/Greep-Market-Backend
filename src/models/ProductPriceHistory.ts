@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IProductPriceHistory extends Document {
+export interface IProductPriceHistory extends Document<any, any, any> {
   _id: string;
   product_id: string;
   store_id: string;

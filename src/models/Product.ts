@@ -28,6 +28,7 @@ export interface IProduct extends Document {
   is_featured: boolean;
   created_by: string; // User ID who created the product
   store_id: string;
+  wholesaler_id?: string; // Wholesaler ID who supplies this product
   created_at: Date;
   updated_at: Date;
   
@@ -172,6 +173,11 @@ const productSchema = new Schema<IProduct>({
       message: 'Store ID is required'
     }
   },
+  wholesaler_id: {
+    type: String,
+    ref: 'Wholesaler',
+    sparse: true, // Allows multiple null values but enforces uniqueness for non-null values
+  },
   created_at: {
     type: Date,
     default: Date.now,
@@ -187,6 +193,7 @@ productSchema.index({ name: 'text', description: 'text', tags: 'text' });
 // Note: sku and barcode indexes are automatically created by unique: true
 productSchema.index({ category: 1 });
 productSchema.index({ store_id: 1 });
+// Note: wholesaler_id index is automatically created by Mongoose when using ref + sparse
 productSchema.index({ is_active: 1 });
 productSchema.index({ is_featured: 1 });
 productSchema.index({ created_at: -1 });
