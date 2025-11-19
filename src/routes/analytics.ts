@@ -5,7 +5,7 @@ import { asyncHandler } from '../middleware/errorHandler';
 import { AnalyticsService } from '../services/analyticsService';
 import { ExpenseService } from '../services/expenseService';
 import { logger } from '../utils/logger';
-import { getStoreTimezone, debugTimezoneInfo } from '../utils/timezone';
+import { getStoreTimezone, debugTimezoneInfo, getLastNDaysRange } from '../utils/timezone';
 
 const router = Router();
 
@@ -319,6 +319,301 @@ router.get('/reports', authorize('admin', 'owner', 'manager'), asyncHandler(asyn
     message: 'Reports endpoint - to be implemented',
     data: null,
   });
+}));
+
+/**
+ * @route   GET /api/v1/analytics/sales/by-day-of-week
+ * @desc    Get sales analytics by day of week
+ * @access  Private
+ */
+router.get('/sales/by-day-of-week', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date, period } = req.query;
+    const timezone = getStoreTimezone(storeId);
+
+    let startDate: Date | undefined;
+    let endDate: Date | undefined;
+
+    // If custom date range is provided, use it
+    if (start_date && end_date) {
+      startDate = new Date(start_date as string);
+      endDate = new Date(end_date as string);
+    } else if (period) {
+      // Convert period to date range
+      const days = period === '7d' ? 7 : period === '30d' ? 30 : period === '90d' ? 90 : period === '1y' ? 365 : 30;
+      const dateRange = getLastNDaysRange(days, timezone);
+      startDate = dateRange.start;
+      endDate = dateRange.end;
+    }
+
+    const salesByDay = await AnalyticsService.getSalesByDayOfWeek(storeId, startDate, endDate);
+
+    res.json({
+      success: true,
+      data: salesByDay,
+    });
+  } catch (error) {
+    logger.error('Error getting sales by day of week:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get sales by day of week',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/v1/analytics/sales/by-hour-of-day
+ * @desc    Get sales analytics by hour of day
+ * @access  Private
+ */
+router.get('/sales/by-hour-of-day', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date, period } = req.query;
+    const timezone = getStoreTimezone(storeId);
+
+    let startDate: Date | undefined;
+    let endDate: Date | undefined;
+
+    // If custom date range is provided, use it
+    if (start_date && end_date) {
+      startDate = new Date(start_date as string);
+      endDate = new Date(end_date as string);
+    } else if (period) {
+      // Convert period to date range
+      const days = period === '7d' ? 7 : period === '30d' ? 30 : period === '90d' ? 90 : period === '1y' ? 365 : 30;
+      const dateRange = getLastNDaysRange(days, timezone);
+      startDate = dateRange.start;
+      endDate = dateRange.end;
+    }
+
+    const salesByHour = await AnalyticsService.getSalesByHourOfDay(storeId, startDate, endDate);
+
+    res.json({
+      success: true,
+      data: salesByHour,
+    });
+  } catch (error) {
+    logger.error('Error getting sales by hour of day:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get sales by hour of day',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/v1/analytics/sales/by-category
+ * @desc    Get sales analytics by category
+ * @access  Private
+ */
+router.get('/sales/by-category', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date, period } = req.query;
+    const timezone = getStoreTimezone(storeId);
+
+    let startDate: Date | undefined;
+    let endDate: Date | undefined;
+
+    // If custom date range is provided, use it
+    if (start_date && end_date) {
+      startDate = new Date(start_date as string);
+      endDate = new Date(end_date as string);
+    } else if (period) {
+      // Convert period to date range
+      const days = period === '7d' ? 7 : period === '30d' ? 30 : period === '90d' ? 90 : period === '1y' ? 365 : 30;
+      const dateRange = getLastNDaysRange(days, timezone);
+      startDate = dateRange.start;
+      endDate = dateRange.end;
+    }
+
+    const salesByCategory = await AnalyticsService.getSalesByCategory(storeId, startDate, endDate);
+
+    res.json({
+      success: true,
+      data: salesByCategory,
+    });
+  } catch (error) {
+    logger.error('Error getting sales by category:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get sales by category',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/v1/analytics/products/most-profitable
+ * @desc    Get most profitable products by margin
+ * @access  Private
+ */
+router.get('/products/most-profitable', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date, limit = 10 } = req.query;
+
+    const startDate = start_date ? new Date(start_date as string) : undefined;
+    const endDate = end_date ? new Date(end_date as string) : undefined;
+
+    const products = await AnalyticsService.getMostProfitableProducts(
+      storeId,
+      startDate,
+      endDate,
+      parseInt(limit as string) || 10
+    );
+
+    res.json({
+      success: true,
+      data: products,
+    });
+  } catch (error) {
+    logger.error('Error getting most profitable products:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get most profitable products',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/v1/analytics/products/worst-performers
+ * @desc    Get worst performing products (no sales, has stock)
+ * @access  Private
+ */
+router.get('/products/worst-performers', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date, limit = 20 } = req.query;
+
+    const startDate = start_date ? new Date(start_date as string) : undefined;
+    const endDate = end_date ? new Date(end_date as string) : undefined;
+
+    const products = await AnalyticsService.getWorstPerformers(
+      storeId,
+      startDate,
+      endDate,
+      parseInt(limit as string) || 20
+    );
+
+    res.json({
+      success: true,
+      data: products,
+    });
+  } catch (error) {
+    logger.error('Error getting worst performers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get worst performers',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/v1/analytics/products/best-performers
+ * @desc    Get best performing products (top revenue)
+ * @access  Private
+ */
+router.get('/products/best-performers', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date, limit = 10 } = req.query;
+
+    const startDate = start_date ? new Date(start_date as string) : undefined;
+    const endDate = end_date ? new Date(end_date as string) : undefined;
+
+    const products = await AnalyticsService.getBestPerformers(
+      storeId,
+      startDate,
+      endDate,
+      parseInt(limit as string) || 10
+    );
+
+    res.json({
+      success: true,
+      data: products,
+    });
+  } catch (error) {
+    logger.error('Error getting best performers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get best performers',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/v1/analytics/products/fastest-moving
+ * @desc    Get fastest moving products (high turnover rate)
+ * @access  Private
+ */
+router.get('/products/fastest-moving', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date, limit = 10 } = req.query;
+
+    const startDate = start_date ? new Date(start_date as string) : undefined;
+    const endDate = end_date ? new Date(end_date as string) : undefined;
+
+    const products = await AnalyticsService.getFastestMovingProducts(
+      storeId,
+      startDate,
+      endDate,
+      parseInt(limit as string) || 10
+    );
+
+    res.json({
+      success: true,
+      data: products,
+    });
+  } catch (error) {
+    logger.error('Error getting fastest moving products:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get fastest moving products',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+}));
+
+/**
+ * @route   GET /api/v1/analytics/categories/performance
+ * @desc    Get category performance with detailed metrics
+ * @access  Private
+ */
+router.get('/categories/performance', asyncHandler(async (req, res) => {
+  try {
+    const storeId = (req as any).user.storeId || 'default-store';
+    const { start_date, end_date } = req.query;
+
+    const startDate = start_date ? new Date(start_date as string) : undefined;
+    const endDate = end_date ? new Date(end_date as string) : undefined;
+
+    const performance = await AnalyticsService.getCategoryPerformance(
+      storeId,
+      startDate,
+      endDate
+    );
+
+    res.json({
+      success: true,
+      data: performance,
+    });
+  } catch (error) {
+    logger.error('Error getting category performance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get category performance',
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
 }));
 
 export default router;

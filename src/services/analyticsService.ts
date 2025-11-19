@@ -1712,4 +1712,652 @@ export class AnalyticsService {
       return [];
     }
   }
+
+  /**
+   * Get sales by day of week
+   */
+  static async getSalesByDayOfWeek(storeId?: string, startDate?: Date, endDate?: Date): Promise<Array<{
+    day: string;
+    revenue: number;
+    transactions: number;
+  }>> {
+    try {
+      const timezone = getStoreTimezone(storeId);
+      const query: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        query.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        query.created_at = { $gte: defaultStart };
+      }
+
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      
+      const aggregation = await Transaction.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: {
+              $dayOfWeek: {
+                date: '$created_at',
+                timezone: timezone
+              }
+            },
+            revenue: { $sum: '$total_amount' },
+            transactions: { $sum: 1 }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]);
+
+      // Create a map for quick lookup
+      const salesMap = new Map<number, { revenue: number; transactions: number }>();
+      aggregation.forEach(item => {
+        // MongoDB dayOfWeek returns 1-7 (Sunday=1, Monday=2, etc.)
+        salesMap.set(item._id, { revenue: item.revenue, transactions: item.transactions });
+      });
+
+      // Return all days of week, filling in zeros for days without sales
+      return dayNames.map((day, index) => {
+        const dayOfWeek = index + 1; // Sunday = 1, Monday = 2, etc.
+        const data = salesMap.get(dayOfWeek) || { revenue: 0, transactions: 0 };
+        return {
+          day,
+          revenue: data.revenue,
+          transactions: data.transactions
+        };
+      });
+    } catch (error) {
+      logger.error('Error getting sales by day of week:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get sales by hour of day
+   */
+  static async getSalesByHourOfDay(storeId?: string, startDate?: Date, endDate?: Date): Promise<Array<{
+    hour: number;
+    revenue: number;
+    transactions: number;
+  }>> {
+    try {
+      const timezone = getStoreTimezone(storeId);
+      const query: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        query.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        query.created_at = { $gte: defaultStart };
+      }
+
+      const aggregation = await Transaction.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: {
+              $hour: {
+                date: '$created_at',
+                timezone: timezone
+              }
+            },
+            revenue: { $sum: '$total_amount' },
+            transactions: { $sum: 1 }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]);
+
+      // Create a map for quick lookup
+      const salesMap = new Map<number, { revenue: number; transactions: number }>();
+      aggregation.forEach(item => {
+        salesMap.set(item._id, { revenue: item.revenue, transactions: item.transactions });
+      });
+
+      // Return all 24 hours, filling in zeros for hours without sales
+      return Array.from({ length: 24 }, (_, hour) => {
+        const data = salesMap.get(hour) || { revenue: 0, transactions: 0 };
+        return {
+          hour,
+          revenue: data.revenue,
+          transactions: data.transactions
+        };
+      });
+    } catch (error) {
+      logger.error('Error getting sales by hour of day:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get sales by category
+   */
+  static async getSalesByCategory(storeId?: string, startDate?: Date, endDate?: Date): Promise<Array<{
+    category: string;
+    revenue: number;
+    quantity: number;
+    transactions: number;
+    percentage: number;
+  }>> {
+    try {
+      const query: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        query.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        query.created_at = { $gte: defaultStart };
+      }
+
+      // First, get total revenue for percentage calculation
+      const totalRevenueResult = await Transaction.aggregate([
+        { $match: query },
+        { $group: { _id: null, total: { $sum: '$total_amount' } } }
+      ]);
+      const totalRevenue = totalRevenueResult[0]?.total || 0;
+
+      // Get sales by category by joining with products
+      const categorySales = await Transaction.aggregate([
+        { $match: query },
+        { $unwind: '$items' },
+        {
+          $lookup: {
+            from: 'products',
+            let: { productId: '$items.product_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: [{ $toString: '$_id' }, '$$productId']
+                  }
+                }
+              }
+            ],
+            as: 'product'
+          }
+        },
+        { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: {
+              $cond: {
+                if: { $and: [{ $ne: ['$product', null] }, { $ne: ['$product.category', null] }, { $ne: ['$product.category', ''] }] },
+                then: '$product.category',
+                else: 'Uncategorized'
+              }
+            },
+            revenue: { $sum: '$items.total_price' },
+            quantity: { $sum: '$items.quantity' },
+            transactions: { $addToSet: '$_id' }
+          }
+        },
+        {
+          $project: {
+            category: '$_id',
+            revenue: 1,
+            quantity: 1,
+            transactions: { $size: '$transactions' },
+            _id: 0
+          }
+        },
+        { $sort: { revenue: -1 } }
+      ]);
+
+      // Calculate percentage for each category
+      return categorySales.map(category => ({
+        ...category,
+        percentage: totalRevenue > 0 ? (category.revenue / totalRevenue) * 100 : 0
+      }));
+    } catch (error) {
+      logger.error('Error getting sales by category:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get most profitable products by margin
+   */
+  static async getMostProfitableProducts(
+    storeId?: string,
+    startDate?: Date,
+    endDate?: Date,
+    limit: number = 10
+  ): Promise<Array<{
+    productId: string;
+    productName: string;
+    revenue: number;
+    profitMargin: number;
+    avgPricePerSale: number;
+    transactions: number;
+    quantitySold: number;
+  }>> {
+    try {
+      const query: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        query.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        query.created_at = { $gte: defaultStart };
+      }
+
+      const profitableProducts = await Transaction.aggregate([
+        { $match: query },
+        { $unwind: '$items' },
+        {
+          $group: {
+            _id: '$items.product_id',
+            productName: { $first: '$items.product_name' },
+            revenue: { $sum: '$items.total_price' },
+            quantitySold: { $sum: '$items.quantity' },
+            transactions: { $addToSet: '$_id' },
+            avgUnitPrice: { $avg: '$items.unit_price' }
+          }
+        },
+        {
+          $addFields: {
+            avgPricePerSale: {
+              $cond: {
+                if: { $gt: ['$quantitySold', 0] },
+                then: { $divide: ['$revenue', '$quantitySold'] },
+                else: 0
+              }
+            },
+            profitMargin: {
+              // Calculate margin as (revenue per unit / avg unit price) * 100
+              // This gives a percentage indicating how much revenue is generated per unit price
+              $cond: {
+                if: { $and: [{ $gt: ['$quantitySold', 0] }, { $gt: ['$avgUnitPrice', 0] }] },
+                then: {
+                  $multiply: [
+                    {
+                      $divide: [
+                        { $divide: ['$revenue', '$quantitySold'] },
+                        '$avgUnitPrice'
+                      ]
+                    },
+                    100
+                  ]
+                },
+                else: 0
+              }
+            }
+          }
+        },
+        { $sort: { profitMargin: -1 } },
+        { $limit: limit },
+        {
+          $project: {
+            productId: '$_id',
+            productName: 1,
+            revenue: 1,
+            profitMargin: { $round: ['$profitMargin', 2] },
+            avgPricePerSale: { $round: ['$avgPricePerSale', 2] },
+            transactions: { $size: '$transactions' },
+            quantitySold: 1,
+            _id: 0
+          }
+        }
+      ]);
+
+      return profitableProducts;
+    } catch (error) {
+      logger.error('Error getting most profitable products:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get worst performers (products with stock but no sales)
+   */
+  static async getWorstPerformers(
+    storeId?: string,
+    startDate?: Date,
+    endDate?: Date,
+    limit: number = 20
+  ): Promise<Array<{
+    productId: string;
+    productName: string;
+    category: string;
+    stockQuantity: number;
+    price: number;
+    stockValue: number;
+    lastSaleDate?: Date;
+  }>> {
+    try {
+      const productFilter: any = {
+        store_id: storeId,
+        stock_quantity: { $gt: 0 },
+        is_active: true
+      };
+
+      const transactionQuery: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        transactionQuery.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        transactionQuery.created_at = { $gte: defaultStart };
+      }
+
+      // Get all products with stock
+      const productsWithStock = await Product.find(productFilter)
+        .select('_id name category stock_quantity price')
+        .lean();
+
+      // Get products that have sales
+      const productsWithSales = await Transaction.aggregate([
+        { $match: transactionQuery },
+        { $unwind: '$items' },
+        {
+          $group: {
+            _id: '$items.product_id',
+            lastSaleDate: { $max: '$created_at' }
+          }
+        }
+      ]);
+
+      const salesMap = new Map<string, Date>();
+      productsWithSales.forEach(item => {
+        salesMap.set(item._id.toString(), item.lastSaleDate);
+      });
+
+      // Filter products with no sales
+      const worstPerformers = productsWithStock
+        .filter(product => !salesMap.has(product._id.toString()))
+        .map(product => ({
+          productId: product._id.toString(),
+          productName: product.name,
+          category: product.category || 'Uncategorized',
+          stockQuantity: product.stock_quantity,
+          price: product.price,
+          stockValue: product.price * product.stock_quantity,
+          lastSaleDate: salesMap.get(product._id.toString())
+        }))
+        .sort((a, b) => b.stockValue - a.stockValue)
+        .slice(0, limit);
+
+      return worstPerformers;
+    } catch (error) {
+      logger.error('Error getting worst performers:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get category performance with detailed metrics
+   */
+  static async getCategoryPerformance(
+    storeId?: string,
+    startDate?: Date,
+    endDate?: Date
+  ): Promise<Array<{
+    category: string;
+    products: number;
+    totalRevenue: number;
+    quantitySold: number;
+    avgRevenuePerProduct: number;
+    stockValue: number;
+  }>> {
+    try {
+      const transactionQuery: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        transactionQuery.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        transactionQuery.created_at = { $gte: defaultStart };
+      }
+
+      // Get sales by category
+      const salesByCategory = await Transaction.aggregate([
+        { $match: transactionQuery },
+        { $unwind: '$items' },
+        {
+          $lookup: {
+            from: 'products',
+            let: { productId: '$items.product_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $eq: [{ $toString: '$_id' }, '$$productId']
+                  }
+                }
+              }
+            ],
+            as: 'product'
+          }
+        },
+        { $unwind: { path: '$product', preserveNullAndEmptyArrays: true } },
+        {
+          $group: {
+            _id: {
+              $cond: {
+                if: { $and: [{ $ne: ['$product', null] }, { $ne: ['$product.category', null] }, { $ne: ['$product.category', ''] }] },
+                then: '$product.category',
+                else: 'Uncategorized'
+              }
+            },
+            totalRevenue: { $sum: '$items.total_price' },
+            quantitySold: { $sum: '$items.quantity' }
+          }
+        }
+      ]);
+
+      // Get product counts and stock value by category
+      const productStats = await Product.aggregate([
+        { $match: { store_id: storeId } },
+        {
+          $group: {
+            _id: '$category',
+            products: { $sum: 1 },
+            stockValue: { $sum: { $multiply: ['$price', '$stock_quantity'] } }
+          }
+        }
+      ]);
+
+      const productStatsMap = new Map<string, { products: number; stockValue: number }>();
+      productStats.forEach(stat => {
+        productStatsMap.set(stat._id || 'Uncategorized', {
+          products: stat.products,
+          stockValue: stat.stockValue
+        });
+      });
+
+      // Combine sales and product data
+      return salesByCategory.map(sales => {
+        const stats = productStatsMap.get(sales._id) || { products: 0, stockValue: 0 };
+        return {
+          category: sales._id,
+          products: stats.products,
+          totalRevenue: sales.totalRevenue,
+          quantitySold: sales.quantitySold,
+          avgRevenuePerProduct: stats.products > 0 ? sales.totalRevenue / stats.products : 0,
+          stockValue: stats.stockValue
+        };
+      }).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    } catch (error) {
+      logger.error('Error getting category performance:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get fastest moving products (high turnover rate)
+   */
+  static async getFastestMovingProducts(
+    storeId?: string,
+    startDate?: Date,
+    endDate?: Date,
+    limit: number = 10
+  ): Promise<Array<{
+    productId: string;
+    productName: string;
+    quantitySold: number;
+    revenue: number;
+    turnoverRate: number;
+    avgDailySales: number;
+  }>> {
+    try {
+      const query: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        query.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        query.created_at = { $gte: defaultStart };
+      }
+
+      const daysDiff = startDate && endDate
+        ? Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
+        : 30;
+
+      const fastestMoving = await Transaction.aggregate([
+        { $match: query },
+        { $unwind: '$items' },
+        {
+          $group: {
+            _id: '$items.product_id',
+            productName: { $first: '$items.product_name' },
+            quantitySold: { $sum: '$items.quantity' },
+            revenue: { $sum: '$items.total_price' }
+          }
+        },
+        {
+          $addFields: {
+            avgDailySales: {
+              $divide: ['$quantitySold', daysDiff]
+            },
+            turnoverRate: {
+              $multiply: [
+                {
+                  $divide: ['$quantitySold', daysDiff]
+                },
+                100
+              ]
+            }
+          }
+        },
+        { $sort: { turnoverRate: -1 } },
+        { $limit: limit },
+        {
+          $project: {
+            productId: '$_id',
+            productName: 1,
+            quantitySold: 1,
+            revenue: 1,
+            turnoverRate: { $round: ['$turnoverRate', 2] },
+            avgDailySales: { $round: ['$avgDailySales', 2] },
+            _id: 0
+          }
+        }
+      ]);
+
+      return fastestMoving;
+    } catch (error) {
+      logger.error('Error getting fastest moving products:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get best performers (top revenue products)
+   */
+  static async getBestPerformers(
+    storeId?: string,
+    startDate?: Date,
+    endDate?: Date,
+    limit: number = 10
+  ): Promise<Array<{
+    productId: string;
+    productName: string;
+    revenue: number;
+    quantitySold: number;
+    transactions: number;
+  }>> {
+    try {
+      const query: any = {
+        store_id: storeId,
+        status: { $in: ['completed', 'pending'] }
+      };
+
+      if (startDate && endDate) {
+        query.created_at = { $gte: startDate, $lte: endDate };
+      } else {
+        // Default to last 30 days
+        const defaultStart = new Date();
+        defaultStart.setDate(defaultStart.getDate() - 30);
+        query.created_at = { $gte: defaultStart };
+      }
+
+      const bestPerformers = await Transaction.aggregate([
+        { $match: query },
+        { $unwind: '$items' },
+        {
+          $group: {
+            _id: '$items.product_id',
+            productName: { $first: '$items.product_name' },
+            revenue: { $sum: '$items.total_price' },
+            quantitySold: { $sum: '$items.quantity' },
+            transactions: { $addToSet: '$_id' }
+          }
+        },
+        { $sort: { revenue: -1 } },
+        { $limit: limit },
+        {
+          $project: {
+            productId: '$_id',
+            productName: 1,
+            revenue: 1,
+            quantitySold: 1,
+            transactions: { $size: '$transactions' },
+            _id: 0
+          }
+        }
+      ]);
+
+      return bestPerformers;
+    } catch (error) {
+      logger.error('Error getting best performers:', error);
+      return [];
+    }
+  }
 }
