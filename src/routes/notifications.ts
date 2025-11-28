@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { authenticate } from '../middleware/auth';
+import { robustAuthenticate } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { NotificationService } from '../services/notificationService';
 import { MilestoneService } from '../services/milestoneService';
@@ -8,8 +8,8 @@ import { logger } from '../utils/logger';
 
 const router = Router();
 
-// All notification routes require authentication
-router.use(authenticate);
+// All notification routes require authentication (with automatic token refresh support)
+router.use(robustAuthenticate);
 
 /**
  * @route   GET /api/v1/notifications

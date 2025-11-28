@@ -28,6 +28,10 @@ export interface DashboardMetrics {
   totalTransactions: number;
   averageTransactionValue: number;
   growthRate: number;
+  salesVsPreviousPeriod?: number;
+  expensesVsPreviousPeriod?: number;
+  profitVsPreviousPeriod?: number;
+  transactionsVsPreviousPeriod?: number;
   salesVsYesterday: number;
   expensesVsYesterday: number;
   profitVsYesterday: number;
@@ -310,6 +314,9 @@ export class AnalyticsService {
       // Monthly expenses should always use monthly date range
       const monthlyExpenseStats = await ExpenseService.getExpenseStats(storeId, monthRange.start, monthRange.end);
 
+      // Calculate expense totals (needed for vsPreviousPeriodMetrics calculation)
+      const totalExpenses = expenseStats.totalAmount;
+
       // Optimized parallel queries using aggregations for better performance
       const [
         productStats,
@@ -404,6 +411,9 @@ export class AnalyticsService {
       // Calculate growth rate (current period vs previous period)
       const growthRate = await this.calculateGrowthRate(storeId, filters);
       
+      // Calculate vs previous period metrics for all metrics
+      const vsPreviousPeriodMetrics = await this.calculateVsPreviousPeriodMetrics(storeId, filters, totalSales.totalSales, totalSales.totalTransactions, totalExpenses);
+      
       // Calculate vs yesterday metrics
       const vsYesterdayMetrics = await this.calculateVsYesterdayMetrics(storeId, filters);
 
@@ -457,8 +467,7 @@ export class AnalyticsService {
         salesByPeriodData = null; // Will use salesByMonth instead
       }
 
-      // Calculate expense totals
-      const totalExpenses = expenseStats.totalAmount;
+      // Calculate monthly expense total
       const monthlyExpenses = monthlyExpenseStats.totalAmount;
 
       // Get proper sales by month data with online/in-store breakdown
@@ -505,6 +514,10 @@ export class AnalyticsService {
         totalTransactions: totalSales.totalTransactions,
         averageTransactionValue,
         growthRate,
+        salesVsPreviousPeriod: vsPreviousPeriodMetrics.salesVsPreviousPeriod,
+        expensesVsPreviousPeriod: vsPreviousPeriodMetrics.expensesVsPreviousPeriod,
+        profitVsPreviousPeriod: vsPreviousPeriodMetrics.profitVsPreviousPeriod,
+        transactionsVsPreviousPeriod: vsPreviousPeriodMetrics.transactionsVsPreviousPeriod,
         salesVsYesterday: vsYesterdayMetrics.salesVsYesterday,
         expensesVsYesterday: vsYesterdayMetrics.expensesVsYesterday,
         profitVsYesterday: vsYesterdayMetrics.profitVsYesterday,
@@ -1512,16 +1525,30 @@ export class AnalyticsService {
     try {
       const timezone = getStoreTimezone(storeId);
       let currentPeriodStart: Date;
+      let currentPeriodEnd: Date;
       let previousPeriodStart: Date;
       let previousPeriodEnd: Date;
 
       // Determine period based on filters
-      if (filters?.dateRange) {
+      if (filters?.startDate && filters?.endDate) {
+        // Custom date range provided - calculate previous period of same duration
+        currentPeriodStart = filters.startDate instanceof Date ? filters.startDate : new Date(filters.startDate);
+        currentPeriodEnd = filters.endDate instanceof Date ? filters.endDate : new Date(filters.endDate);
+        
+        // Calculate the duration of the current period
+        const periodDurationMs = currentPeriodEnd.getTime() - currentPeriodStart.getTime();
+        
+        // Calculate previous period (same duration, ending just before current period starts)
+        previousPeriodEnd = new Date(currentPeriodStart.getTime() - 1);
+        previousPeriodStart = new Date(previousPeriodEnd.getTime() - periodDurationMs);
+      } else if (filters?.dateRange) {
+        // Predefined date range (7d, 30d, etc.)
         const days = this.getDaysFromDateRange(filters.dateRange);
         const currentRange = getLastNDaysRange(days, timezone);
         const previousRange = getLastNDaysRange(days * 2, timezone);
         
         currentPeriodStart = currentRange.start;
+        currentPeriodEnd = currentRange.end;
         previousPeriodStart = previousRange.start;
         previousPeriodEnd = new Date(currentPeriodStart.getTime() - 1);
       } else {
@@ -1532,6 +1559,7 @@ export class AnalyticsService {
         const lastMonthEnd = new Date(monthRange.start.getTime() - 1);
         
         currentPeriodStart = monthRange.start;
+        currentPeriodEnd = monthRange.end;
         previousPeriodStart = new Date(lastMonth.getFullYear(), lastMonth.getMonth(), 1);
         previousPeriodEnd = lastMonthEnd;
       }
@@ -1557,12 +1585,12 @@ export class AnalyticsService {
           baseFilter.order_source = filters.orderSource;
         }
       } else {
-        baseFilter.status = 'completed'; // Default to completed
+        baseFilter.status = { $in: ['completed', 'pending'] }; // Default to both completed and pending
       }
 
       const [currentPeriodSales, previousPeriodSales] = await Promise.all([
         Transaction.aggregate([
-          { $match: { ...baseFilter, created_at: { $gte: currentPeriodStart } } },
+          { $match: { ...baseFilter, created_at: { $gte: currentPeriodStart, $lte: currentPeriodEnd } } },
           { $group: { _id: null, total: { $sum: '$total_amount' } } }
         ]),
         Transaction.aggregate([
@@ -1583,6 +1611,128 @@ export class AnalyticsService {
     } catch (error) {
       logger.error('Error calculating growth rate:', error);
       return 0;
+    }
+  }
+
+  /**
+   * Calculate vs previous period metrics for all metrics (sales, expenses, profit, transactions)
+   */
+  private static async calculateVsPreviousPeriodMetrics(
+    storeId?: string,
+    filters?: DashboardFilters,
+    currentSales: number = 0,
+    currentTransactions: number = 0,
+    currentExpenses: number = 0
+  ): Promise<{
+    salesVsPreviousPeriod: number;
+    expensesVsPreviousPeriod: number;
+    profitVsPreviousPeriod: number;
+    transactionsVsPreviousPeriod: number;
+  }> {
+    try {
+      const timezone = getStoreTimezone(storeId);
+      let currentPeriodStart: Date;
+      let currentPeriodEnd: Date;
+      let previousPeriodStart: Date;
+      let previousPeriodEnd: Date;
+
+      // Determine period based on filters (same logic as calculateGrowthRate)
+      if (filters?.startDate && filters?.endDate) {
+        // Custom date range provided - calculate previous period of same duration
+        currentPeriodStart = filters.startDate instanceof Date ? filters.startDate : new Date(filters.startDate);
+        currentPeriodEnd = filters.endDate instanceof Date ? filters.endDate : new Date(filters.endDate);
+        
+        // Calculate the duration of the current period
+        const periodDurationMs = currentPeriodEnd.getTime() - currentPeriodStart.getTime();
+        
+        // Calculate previous period (same duration, ending just before current period starts)
+        previousPeriodEnd = new Date(currentPeriodStart.getTime() - 1);
+        previousPeriodStart = new Date(previousPeriodEnd.getTime() - periodDurationMs);
+      } else if (filters?.dateRange) {
+        // Predefined date range (7d, 30d, etc.)
+        const days = this.getDaysFromDateRange(filters.dateRange);
+        const currentRange = getLastNDaysRange(days, timezone);
+        const previousRange = getLastNDaysRange(days * 2, timezone);
+        
+        currentPeriodStart = currentRange.start;
+        currentPeriodEnd = currentRange.end;
+        previousPeriodStart = previousRange.start;
+        previousPeriodEnd = new Date(currentPeriodStart.getTime() - 1);
+      } else {
+        // Default to monthly comparison
+        const monthRange = getThisMonthRange(timezone);
+        const lastMonth = new Date(monthRange.start);
+        lastMonth.setMonth(lastMonth.getMonth() - 1);
+        const lastMonthEnd = new Date(monthRange.start.getTime() - 1);
+        
+        currentPeriodStart = monthRange.start;
+        currentPeriodEnd = monthRange.end;
+        previousPeriodStart = new Date(lastMonth.getFullYear(), lastMonth.getMonth(), 1);
+        previousPeriodEnd = lastMonthEnd;
+      }
+
+      let baseFilter: any = storeId ? { store_id: storeId } : {};
+      
+      // Apply filters
+      if (filters) {
+        if (filters.status && filters.status !== 'all') {
+          baseFilter.status = filters.status;
+        } else {
+          baseFilter.status = { $in: ['completed', 'pending'] };
+        }
+
+        if (filters.paymentMethod && filters.paymentMethod !== 'all') {
+          baseFilter.payment_method = filters.paymentMethod;
+        }
+
+        if (filters.orderSource && filters.orderSource !== 'all') {
+          baseFilter.order_source = filters.orderSource;
+        }
+      } else {
+        baseFilter.status = { $in: ['completed', 'pending'] };
+      }
+
+      // Get previous period data for transactions and expenses
+      const [previousPeriodTransactions, previousPeriodExpenses] = await Promise.all([
+        Transaction.aggregate([
+          { $match: { ...baseFilter, created_at: { $gte: previousPeriodStart, $lte: previousPeriodEnd } } },
+          {
+            $group: {
+              _id: null,
+              totalSales: { $sum: '$total_amount' },
+              totalTransactions: { $sum: 1 }
+            }
+          }
+        ]),
+        ExpenseService.getExpenseStats(storeId, previousPeriodStart, previousPeriodEnd)
+      ]);
+
+      const previousSales = previousPeriodTransactions[0]?.totalSales || 0;
+      const previousTransactions = previousPeriodTransactions[0]?.totalTransactions || 0;
+      const previousExpenses = previousPeriodExpenses.totalAmount || 0;
+      const previousProfit = previousSales - previousExpenses;
+      const currentProfit = currentSales - currentExpenses;
+
+      // Calculate percentage changes
+      const salesVsPreviousPeriod = this.calculatePercentageChange(previousSales, currentSales);
+      const expensesVsPreviousPeriod = this.calculatePercentageChange(previousExpenses, currentExpenses);
+      const profitVsPreviousPeriod = this.calculatePercentageChange(previousProfit, currentProfit);
+      const transactionsVsPreviousPeriod = this.calculatePercentageChange(previousTransactions, currentTransactions);
+
+      return {
+        salesVsPreviousPeriod,
+        expensesVsPreviousPeriod,
+        profitVsPreviousPeriod,
+        transactionsVsPreviousPeriod
+      };
+    } catch (error) {
+      logger.error('Error calculating vs previous period metrics:', error);
+      return {
+        salesVsPreviousPeriod: 0,
+        expensesVsPreviousPeriod: 0,
+        profitVsPreviousPeriod: 0,
+        transactionsVsPreviousPeriod: 0
+      };
     }
   }
 

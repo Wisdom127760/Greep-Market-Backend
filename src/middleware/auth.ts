@@ -128,7 +128,7 @@ export const robustAuthenticate = async (req: Request, res: Response, next: Next
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       logger.warn(`Missing authorization header for ${req.method} ${req.path} from ${req.ip}`);
-      throw unauthorizedError('Access token required');
+      throw unauthorizedError('Access token required. Please include Authorization header with Bearer token.');
     }
 
     const token = authHeader.substring(7);

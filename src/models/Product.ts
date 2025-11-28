@@ -5,6 +5,7 @@ export interface IProduct extends Document {
   name: string;
   description: string;
   price: number;
+  vat?: number; // VAT percentage
   category: string;
   sku: string;
   barcode?: string;
@@ -67,6 +68,13 @@ const productSchema = new Schema<IProduct>({
     type: Number,
     required: true,
     min: 0,
+  },
+  vat: {
+    type: Number,
+    required: false,
+    min: 0,
+    max: 100,
+    default: 0,
   },
   category: {
     type: String,

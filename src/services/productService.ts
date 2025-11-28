@@ -10,6 +10,7 @@ export interface CreateProductData {
   name: string;
   description: string;
   price: number;
+  vat?: number;
   category: string;
   sku: string;
   barcode?: string;
@@ -351,10 +352,22 @@ export class ProductService {
    */
   static formatProductResponse(product: IProduct): any {
     const productObj = (product as any).toObject ? (product as any).toObject() : product;
-    return {
+    const formatted = {
       ...productObj,
       tags: product.tags ? cleanTagsForStorage(product.tags) : [],
+      // Ensure VAT is included (default to 0 if not present)
+      vat: productObj.vat !== undefined ? productObj.vat : 0,
     };
+    
+    // Debug logging to verify VAT is in response
+    logger.debug('Formatted product response:', {
+      sku: productObj.sku,
+      hasVat: 'vat' in formatted,
+      vatValue: formatted.vat,
+      originalVat: productObj.vat
+    });
+    
+    return formatted;
   }
 
   /**
@@ -473,11 +486,30 @@ export class ProductService {
       }
 
       // Update product
+      // Use Object.assign for most fields, but explicitly handle VAT to ensure it's saved
       Object.assign(product, updateData);
+      
+      // Explicitly set VAT if it's in the updateData to ensure it's saved (even if 0)
+      if ('vat' in updateData) {
+        product.vat = updateData.vat ?? 0;
+        product.markModified('vat'); // Force Mongoose to save this field
+      }
+      
       await product.save();
 
-      logger.info(`Product updated: ${product.sku}`);
-      return product;
+      // Refresh the product to ensure all fields are loaded
+      const updatedProduct = await Product.findById(productId);
+      if (!updatedProduct) {
+        throw validationError('Product not found after update');
+      }
+
+      logger.info(`Product updated: ${updatedProduct.sku}`, {
+        vat: updatedProduct.vat,
+        updateDataVat: updateData.vat,
+        productVatAfterSave: (updatedProduct as any).vat,
+        hasVatInUpdate: 'vat' in updateData
+      });
+      return updatedProduct;
     } catch (error) {
       logger.error('Update product error:', error);
       throw error;

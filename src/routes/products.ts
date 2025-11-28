@@ -16,7 +16,7 @@ const router = Router();
  */
 router.post('/', uploadMultiple('images', 5), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { name, description, price, category, sku, barcode, stock_quantity, store_id, created_by, tags } = req.body;
+    const { name, description, price, vat, category, sku, barcode, stock_quantity, store_id, created_by, tags } = req.body;
     const images = req.files as Express.Multer.File[];
 
     // Check for required fields - allow empty strings but not undefined/null
@@ -36,10 +36,21 @@ router.post('/', uploadMultiple('images', 5), async (req: Request, res: Response
     // Parse and clean tags using the tag formatter utility
     const parsedTags = cleanTagsForStorage(parseTagsFromInput(tags));
 
+    // Parse VAT if provided (convert string to number)
+    // When FormData is used, all fields come as strings
+    let parsedVat: number | undefined = undefined;
+    if (vat !== undefined && vat !== null && vat !== '') {
+      const vatNum = typeof vat === 'string' ? parseFloat(vat) : Number(vat);
+      parsedVat = isNaN(vatNum) ? 0 : vatNum;
+    } else if (vat === '' || vat === null) {
+      parsedVat = 0;
+    }
+
     const product = await ProductService.createProduct({
       name: name || 'Unnamed Product',
       description: description || '', // Always provide empty string if not provided
       price: parseFloat(price) || 0,
+      vat: parsedVat,
       category: category || 'Uncategorized',
       sku: sku || `SKU-IMPORT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       barcode: barcode || undefined,
@@ -170,6 +181,16 @@ router.put('/:id', uploadMultiple('images', 5), async (req: Request, res: Respon
     const newImages = req.files as Express.Multer.File[];
     const replaceImages = updateData.replace_images === 'true' || updateData.replace_images === true;
 
+    // Debug: Log raw request body to see what's being sent
+    logger.info('Raw update request body:', {
+      productId: id,
+      bodyKeys: Object.keys(updateData),
+      vatInBody: 'vat' in updateData,
+      vatValue: updateData.vat,
+      vatType: typeof updateData.vat,
+      fullBody: JSON.stringify(updateData)
+    });
+
     // Get the old product data for audit logging
     const oldProduct = await ProductService.getProductById(id);
     
@@ -188,6 +209,31 @@ router.put('/:id', uploadMultiple('images', 5), async (req: Request, res: Respon
 
     // Remove images from updateData since they're handled separately
     const { images, replace_images, ...updateDataWithoutImages } = updateData;
+    
+    // Parse VAT if provided (convert string to number)
+    // When FormData is used, all fields come as strings, so we need to parse them
+    if ('vat' in updateData) {
+      const vatValue = updateData.vat;
+      if (vatValue === '' || vatValue === null || vatValue === undefined) {
+        // Explicitly set to 0 if empty string or null
+        updateDataWithoutImages.vat = 0;
+      } else {
+        const parsedVat = typeof vatValue === 'string' ? parseFloat(vatValue) : Number(vatValue);
+        updateDataWithoutImages.vat = isNaN(parsedVat) ? 0 : parsedVat;
+      }
+    }
+    
+    // Debug logging
+    logger.info('Product update data:', {
+      productId: id,
+      vatInOriginalBody: 'vat' in updateData,
+      vatOriginalValue: updateData.vat,
+      vatInUpdateData: 'vat' in updateDataWithoutImages,
+      vatParsedValue: updateDataWithoutImages.vat,
+      vatType: typeof updateDataWithoutImages.vat,
+      updateFields: Object.keys(updateDataWithoutImages),
+      allBodyKeys: Object.keys(updateData)
+    });
     
     const product = await ProductService.updateProduct(id, updateDataWithoutImages);
   
