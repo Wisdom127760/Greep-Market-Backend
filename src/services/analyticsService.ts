@@ -10,6 +10,7 @@ import {
   getTodayRange, 
   getThisMonthRange, 
   getLastNDaysRange,
+  getMonthYearRange,
   debugTimezoneInfo,
   formatDateForTimezone
 } from '../utils/timezone';
@@ -21,6 +22,8 @@ export interface DashboardFilters {
   status?: string;
   startDate?: Date;
   endDate?: Date;
+  month?: number; // Month number (1-12)
+  year?: number; // Year (e.g., 2025)
 }
 
 export interface DashboardMetrics {
@@ -165,9 +168,6 @@ export class AnalyticsService {
    */
   static async getDashboardMetrics(storeId?: string, filters?: DashboardFilters): Promise<DashboardMetrics> {
     try {
-      // Debug logging
-      logger.info('Dashboard metrics request:', { storeId, filters });
-      
       // Create cache key based on store and filters
       const cacheKey = cacheKeys.analytics(storeId || 'default', 'dashboard', JSON.stringify(filters || {}));
       
@@ -175,143 +175,93 @@ export class AnalyticsService {
       try {
         const cachedMetrics = await cache.get<DashboardMetrics>(cacheKey);
         if (cachedMetrics) {
-          logger.info('Dashboard metrics served from cache');
           return cachedMetrics;
         }
       } catch (cacheError) {
-        logger.warn('Cache read failed, proceeding with database query:', cacheError);
+        // Cache read failed, proceed with database query
       }
       
-      // Log the date filter that will be applied
+      // ============================================================================
+      // STEP 1: Get the PRIMARY date range - this will be used for ALL metrics
+      // ============================================================================
       const storeTimezone = getStoreTimezone(storeId);
-      const dateFilter = this.getDateFilter(filters, storeTimezone);
-      logger.info('Date filter applied:', { dateFilter, filters, timezone: storeTimezone });
+      const primaryDateFilter = this.getDateFilter(filters, storeTimezone);
       
-      // Build base query filters
+      // Determine the primary date range (used for sales, expenses, transactions, profit)
+      let primaryStartDate: Date;
+      let primaryEndDate: Date;
+      
+      if (primaryDateFilter) {
+        primaryStartDate = primaryDateFilter.$gte;
+        primaryEndDate = primaryDateFilter.$lte;
+      } else {
+        // No date filter - use last 30 days as default
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        primaryStartDate = thirtyDaysAgo;
+        primaryEndDate = new Date();
+      }
+      
+      // ============================================================================
+      // STEP 2: Build transaction filter with the PRIMARY date range
+      // ============================================================================
       const productFilter = storeId ? { store_id: storeId } : {};
       let transactionFilter: any = storeId ? { store_id: storeId } : {};
 
-      // Apply filters
-      if (filters) {
-        // Apply status filter
-        if (filters.status && filters.status !== 'all') {
-          transactionFilter.status = filters.status;
-        } else {
-          transactionFilter.status = { $in: ['completed', 'pending'] }; // Include both completed and pending
-        }
-
-        // Apply payment method filter
-        if (filters.paymentMethod && filters.paymentMethod !== 'all') {
-          transactionFilter.payment_method = filters.paymentMethod;
-        }
-
-        // Note: order_source filter is not available in current Transaction model
-        // This can be added later if needed
-
-        // Apply date range filter
-        const dateFilter = this.getDateFilter(filters, storeTimezone);
-        if (dateFilter) {
-          transactionFilter.created_at = dateFilter;
-          logger.info('Applied timezone-aware date filter:', { dateFilter, transactionFilter, timezone: storeTimezone });
-        }
+      // Apply status filter
+      if (filters?.status && filters.status !== 'all') {
+        transactionFilter.status = filters.status;
       } else {
-        transactionFilter.status = { $in: ['completed', 'pending'] }; // Include both completed and pending
+        transactionFilter.status = { $in: ['completed', 'pending'] };
       }
 
-      // Get timezone-aware date ranges for today/monthly calculations
+      // Apply payment method filter
+      if (filters?.paymentMethod && filters.paymentMethod !== 'all') {
+        transactionFilter.payment_method = filters.paymentMethod;
+      }
+
+      // Apply the PRIMARY date filter
+      transactionFilter.created_at = {
+        $gte: primaryStartDate,
+        $lte: primaryEndDate
+      };
+
+      // ============================================================================
+      // STEP 3: Get date ranges for "today" and "monthly" calculations
+      // ============================================================================
       const todayRange = getTodayRange(storeTimezone);
-      const monthRange = getThisMonthRange(storeTimezone);
-
-      // Create separate filters for today and monthly calculations
-      // Today filter: use the applied date filter (for "today" this will be today's range)
-      // Monthly filter: always use the full month range for monthly calculations
-      const todayFilter = transactionFilter; // Use the filtered date range
-      const monthlyFilter = { ...transactionFilter, created_at: { $gte: monthRange.start } }; // Always use full month for monthly data
-
-      // Get expense data - use same date filtering as transactions
-      let expenseStartDate, expenseEndDate;
-      if (filters && (filters.startDate || filters.endDate)) {
-        // Custom date range - use the provided dates directly
-        if (filters.startDate) {
-          // Parse in timezone if string, otherwise use as-is
-          expenseStartDate = typeof filters.startDate === 'string'
-            ? parseDateRange(filters.startDate, filters.startDate, storeTimezone)?.start || new Date(filters.startDate)
-            : filters.startDate;
-        } else {
-          expenseStartDate = monthRange.start;
-        }
-        
-        if (filters.endDate) {
-          expenseEndDate = typeof filters.endDate === 'string'
-            ? parseDateRange(filters.endDate, filters.endDate, storeTimezone)?.end || new Date(filters.endDate)
-            : filters.endDate;
-          // Ensure endDate is end of day in local timezone
-          expenseEndDate.setHours(23, 59, 59, 999);
-        } else {
-          expenseEndDate = monthRange.end;
-        }
-        
-        logger.info('Using custom date range for expense data:', {
-          storeId,
-          originalStartDate: filters.startDate,
-          originalEndDate: filters.endDate,
-          parsedStartDate: expenseStartDate?.toISOString(),
-          parsedEndDate: expenseEndDate?.toISOString(),
-          timezone: storeTimezone
-        });
-      } else if (filters && filters.dateRange) {
-        // Predefined date range - use getDateFilter
-        const dateFilter = this.getDateFilter(filters, storeTimezone);
-        if (dateFilter) {
-          expenseStartDate = dateFilter.$gte;
-          expenseEndDate = dateFilter.$lte;
-        } else {
-          // Fallback to current month range to match default charts
-          expenseStartDate = monthRange.start;
-          expenseEndDate = monthRange.end;
-        }
+      
+      // For monthly calculations: use selected month/year OR current month
+      let monthRange;
+      if (filters?.month && filters?.year) {
+        monthRange = getMonthYearRange(filters.month, filters.year, storeTimezone);
       } else {
-        // No filter provided: use a broader range to show historical expense data
-        // This ensures expense trends are visible even without specific date filters
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        expenseStartDate = thirtyDaysAgo;
-        expenseEndDate = new Date();
+        monthRange = getThisMonthRange(storeTimezone);
       }
       
-      // Debug logging for filters
-      logger.info('Filter breakdown:', { 
-        timezone: storeTimezone,
-        todayFilter, 
-        monthlyFilter, 
-        expenseStartDate: expenseStartDate?.toISOString(), 
-        expenseEndDate: expenseEndDate?.toISOString(),
-        todayRange: {
-          start: todayRange.start.toISOString(),
-          end: todayRange.end.toISOString()
-        },
-        monthRange: {
-          start: monthRange.start.toISOString(),
-          end: monthRange.end.toISOString()
+      // Today filter (for todaySales metric)
+      const todayFilter = {
+        ...transactionFilter,
+        created_at: {
+          $gte: todayRange.start,
+          $lte: todayRange.end
         }
-      });
+      };
       
-      const expenseStats = await ExpenseService.getExpenseStats(storeId, expenseStartDate, expenseEndDate);
-      const expenseSeries = await ExpenseService.getExpenseSeries(expenseStartDate, expenseEndDate, storeId);
-      
-      // Debug logging for expense data
-      logger.info('Expense data debug:', {
-        expenseStartDate: expenseStartDate?.toISOString(),
-        expenseEndDate: expenseEndDate?.toISOString(),
-        expenseStats: {
-          totalExpenses: expenseStats.totalExpenses,
-          totalAmount: expenseStats.totalAmount
-        },
-        expenseSeriesLength: expenseSeries.length,
-        expenseSeries: expenseSeries.slice(0, 5) // Show first 5 entries for debugging
-      });
-        
-      // Monthly expenses should always use monthly date range
+      // Monthly filter (for monthlySales metric)
+      const monthlyFilter = {
+        ...transactionFilter,
+        created_at: {
+          $gte: monthRange.start,
+          $lte: monthRange.end
+        }
+      };
+
+      // ============================================================================
+      // STEP 4: Get expenses using the SAME PRIMARY date range
+      // ============================================================================
+      const expenseStats = await ExpenseService.getExpenseStats(storeId, primaryStartDate, primaryEndDate);
+      const expenseSeries = await ExpenseService.getExpenseSeries(primaryStartDate, primaryEndDate, storeId);
       const monthlyExpenseStats = await ExpenseService.getExpenseStats(storeId, monthRange.start, monthRange.end);
 
       // Calculate expense totals (needed for vsPreviousPeriodMetrics calculation)
@@ -348,13 +298,24 @@ export class AnalyticsService {
         Transaction.aggregate([
           {
             $facet: {
-              // Total filtered transactions
+              // Total filtered transactions - SIMPLIFIED AND FIXED
               totalStats: [
                 { $match: transactionFilter },
                 {
                   $group: {
                     _id: null,
-                    totalSales: { $sum: '$total_amount' },
+                    totalSales: { 
+                      $sum: {
+                        $cond: [
+                          { $and: [
+                            { $ne: ['$total_amount', null] },
+                            { $ne: ['$total_amount', undefined] }
+                          ]},
+                          { $toDouble: '$total_amount' },
+                          0
+                        ]
+                      }
+                    },
                     totalTransactions: { $sum: 1 }
                   }
                 }
@@ -365,7 +326,18 @@ export class AnalyticsService {
                 {
                   $group: {
                     _id: null,
-                    todaySales: { $sum: '$total_amount' },
+                    todaySales: { 
+                      $sum: {
+                        $cond: [
+                          { $and: [
+                            { $ne: ['$total_amount', null] },
+                            { $ne: ['$total_amount', undefined] }
+                          ]},
+                          { $toDouble: '$total_amount' },
+                          0
+                        ]
+                      }
+                    },
                     todayTransactions: { $sum: 1 }
                   }
                 }
@@ -376,7 +348,18 @@ export class AnalyticsService {
                 {
                   $group: {
                     _id: null,
-                    monthlySales: { $sum: '$total_amount' },
+                    monthlySales: { 
+                      $sum: {
+                        $cond: [
+                          { $and: [
+                            { $ne: ['$total_amount', null] },
+                            { $ne: ['$total_amount', undefined] }
+                          ]},
+                          { $toDouble: '$total_amount' },
+                          0
+                        ]
+                      }
+                    },
                     monthlyTransactions: { $sum: 1 }
                   }
                 }
@@ -400,9 +383,50 @@ export class AnalyticsService {
       const productData = productStats[0] || { totalProducts: 0, lowStockProducts: 0 };
       const transactionData = transactionStats[0];
       
-      const totalSales = transactionData.totalStats[0] || { totalSales: 0, totalTransactions: 0 };
-      const todaySales = transactionData.todayStats[0] || { todaySales: 0, todayTransactions: 0 };
-      const monthlySales = transactionData.monthlyStats[0] || { monthlySales: 0, monthlyTransactions: 0 };
+      // Safely extract results with defaults
+      const totalSales = transactionData?.totalStats?.[0] || { totalSales: 0, totalTransactions: 0 };
+      const todaySales = transactionData?.todayStats?.[0] || { todaySales: 0, todayTransactions: 0 };
+      const monthlySales = transactionData?.monthlyStats?.[0] || { monthlySales: 0, monthlyTransactions: 0 };
+      
+      // Ensure values are numbers
+      totalSales.totalSales = Number(totalSales.totalSales) || 0;
+      totalSales.totalTransactions = Number(totalSales.totalTransactions) || 0;
+      todaySales.todaySales = Number(todaySales.todaySales) || 0;
+      todaySales.todayTransactions = Number(todaySales.todayTransactions) || 0;
+      monthlySales.monthlySales = Number(monthlySales.monthlySales) || 0;
+      monthlySales.monthlyTransactions = Number(monthlySales.monthlyTransactions) || 0;
+      
+      // Critical check: If we have transactions but no sales, something is wrong
+      if (totalSales.totalTransactions > 0 && totalSales.totalSales === 0) {
+        logger.error('CRITICAL ERROR: Transactions found but sales = 0!', {
+          transactionCount: totalSales.totalTransactions,
+          totalSales: totalSales.totalSales,
+          filter: JSON.stringify(transactionFilter),
+          dateRange: {
+            start: primaryStartDate.toISOString(),
+            end: primaryEndDate.toISOString()
+          }
+        });
+        
+        // Query sample transactions to debug
+        try {
+          const sampleTransactions = await Transaction.find(transactionFilter)
+            .select('_id total_amount created_at status')
+            .limit(5)
+            .lean();
+          logger.error('Sample transactions:', {
+            count: sampleTransactions.length,
+            samples: sampleTransactions.map(t => ({
+              id: t._id,
+              total_amount: t.total_amount,
+              total_amount_type: typeof t.total_amount,
+              created_at: t.created_at
+            }))
+          });
+        } catch (sampleError) {
+          logger.error('Error fetching sample transactions:', sampleError);
+        }
+      }
       
       const averageTransactionValue = totalSales.totalTransactions > 0 
         ? totalSales.totalSales / totalSales.totalTransactions 
@@ -418,47 +442,15 @@ export class AnalyticsService {
       const vsYesterdayMetrics = await this.calculateVsYesterdayMetrics(storeId, filters);
 
       // Get sales data based on the filter period
-      // If custom date range is provided (startDate/endDate), use daily aggregation
-      // Otherwise use predefined periods or monthly data
+      // USE THE PRIMARY DATE RANGE for consistency
       let salesByPeriodData;
-      if (filters && (filters.startDate || filters.endDate)) {
-        // Custom date range - use timezone-aware date parsing
-        // Parse dates in store timezone to ensure correct date range
-        let startDate: Date;
-        let endDate: Date;
-        
-        if (filters.startDate) {
-          // If date string, parse in timezone; if Date object, use as-is
-          startDate = typeof filters.startDate === 'string' 
-            ? parseDateRange(filters.startDate, filters.startDate, storeTimezone)?.start || new Date(filters.startDate)
-            : filters.startDate;
-        } else {
-          startDate = monthRange.start;
-        }
-        
-        if (filters.endDate) {
-          endDate = typeof filters.endDate === 'string'
-            ? parseDateRange(filters.endDate, filters.endDate, storeTimezone)?.end || new Date(filters.endDate)
-            : filters.endDate;
-          // Ensure endDate is end of day in local timezone
-          endDate.setHours(23, 59, 59, 999);
-        } else {
-          endDate = monthRange.end;
-        }
-        
-        logger.info('Using custom date range for sales data:', {
-          storeId,
-          originalStartDate: filters.startDate,
-          originalEndDate: filters.endDate,
-          parsedStartDate: startDate.toISOString(),
-          parsedEndDate: endDate.toISOString(),
-          startDateLocal: startDate.toLocaleString(),
-          endDateLocal: endDate.toLocaleString(),
-          timezone: storeTimezone
-        });
-        
-        const salesAnalytics = await this.getSalesAnalyticsByDateRange(storeId, startDate, endDate);
+      
+      // If we have a primary date range (from month/year or custom dates), use it
+      if (primaryDateFilter) {
+        // Use the PRIMARY date range for salesByPeriod to ensure consistency
+        const salesAnalytics = await this.getSalesAnalyticsByDateRange(storeId, primaryStartDate, primaryEndDate);
         salesByPeriodData = salesAnalytics.salesByPeriod;
+        
       } else if (filters && filters.dateRange) {
         // Use the appropriate period-based sales data for predefined periods
         salesByPeriodData = await this.getSalesByPeriod(storeId, filters.dateRange);
@@ -473,13 +465,24 @@ export class AnalyticsService {
       // Get proper sales by month data with online/in-store breakdown
       const salesByMonthData = await this.getSalesByMonth(storeId, filters);
 
-      // Calculate payment methods breakdown from ALL transactions (not just recent ones)
+      // Calculate payment methods breakdown from filtered transactions
       const paymentMethodsAggregation = await Transaction.aggregate([
         { $match: transactionFilter },
         {
           $group: {
             _id: '$payment_method',
-            totalAmount: { $sum: '$total_amount' }
+            totalAmount: { 
+              $sum: {
+                $cond: [
+                  { $and: [
+                    { $ne: ['$total_amount', null] },
+                    { $ne: ['$total_amount', undefined] }
+                  ]},
+                  { $toDouble: '$total_amount' },
+                  0
+                ]
+              }
+            }
           }
         }
       ]);
@@ -497,7 +500,18 @@ export class AnalyticsService {
         {
           $group: {
             _id: '$order_source',
-            totalAmount: { $sum: '$total_amount' }
+            totalAmount: { 
+              $sum: {
+                $cond: [
+                  { $and: [
+                    { $ne: ['$total_amount', null] },
+                    { $ne: ['$total_amount', undefined] }
+                  ]},
+                  { $toDouble: '$total_amount' },
+                  0
+                ]
+              }
+            }
           }
         }
       ]);
@@ -508,12 +522,12 @@ export class AnalyticsService {
         orderSourcesData[source] = item.totalAmount;
       });
 
-      // Build optimized result
+      // Build optimized result - ENSURE ALL VALUES ARE NUMBERS
       const dashboardMetrics: DashboardMetrics = {
-        totalSales: totalSales.totalSales,
-        totalTransactions: totalSales.totalTransactions,
-        averageTransactionValue,
-        growthRate,
+        totalSales: Number(totalSales.totalSales) || 0,
+        totalTransactions: Number(totalSales.totalTransactions) || 0,
+        averageTransactionValue: Number(averageTransactionValue) || 0,
+        growthRate: Number(growthRate) || 0,
         salesVsPreviousPeriod: vsPreviousPeriodMetrics.salesVsPreviousPeriod,
         expensesVsPreviousPeriod: vsPreviousPeriodMetrics.expensesVsPreviousPeriod,
         profitVsPreviousPeriod: vsPreviousPeriodMetrics.profitVsPreviousPeriod,
@@ -526,9 +540,9 @@ export class AnalyticsService {
         lowStockItems: productData.lowStockProducts,
         todaySales: todaySales.todaySales,
         monthlySales: monthlySales.monthlySales,
-        totalExpenses,
-        monthlyExpenses,
-        netProfit: totalSales.totalSales - totalExpenses,
+        totalExpenses: Number(totalExpenses) || 0,
+        monthlyExpenses: Number(monthlyExpenses) || 0,
+        netProfit: Number(totalSales.totalSales) - Number(totalExpenses),
         topProducts: topProductsData,
         paymentMethods: paymentMethodsData,
         orderSources: orderSourcesData,
@@ -539,18 +553,29 @@ export class AnalyticsService {
           createdAt: t.created_at
         })),
         salesByMonth: salesByMonthData,
-        // Expose sales by period (daily/weekly) for charts when custom date range is used
+        // Expose sales by period (daily/weekly) for charts - uses PRIMARY date range
         salesByPeriod: salesByPeriodData || undefined,
-        // Expose expense series for charts expecting daily values
-        expensesByPeriod: expenseSeries
+        // Expose expense series for charts expecting daily values - uses PRIMARY date range
+        expensesByPeriod: expenseSeries,
+        // DEBUG: Include the date range used for transparency
+        _filterInfo: {
+          dateRange: {
+            start: primaryStartDate.toISOString(),
+            end: primaryEndDate.toISOString()
+          },
+          filters: {
+            month: filters?.month,
+            year: filters?.year,
+            dateRange: filters?.dateRange
+          }
+        }
       };
 
       // Cache the result (5 minute TTL for dashboard metrics)
       try {
         await cache.set(cacheKey, dashboardMetrics, 300); // 5 minutes
-        logger.info('Dashboard metrics cached successfully');
       } catch (cacheError) {
-        logger.warn('Failed to cache dashboard metrics:', cacheError);
+        // Failed to cache, continue without caching
       }
 
       return dashboardMetrics;
@@ -657,19 +682,6 @@ export class AnalyticsService {
           
           cursor.setDate(cursor.getDate() + 1);
         }
-
-        logger.info('Daily sales aggregation result:', {
-          storeId,
-          timezone,
-          dateRange: {
-            start: startDate.toISOString(),
-            end: endDate.toISOString()
-          },
-          daysInRange: daysDiff,
-          periodsReturned: salesByPeriod.length,
-          periodsWithData: salesByPeriod.filter(p => p.revenue > 0 || p.transactions > 0).length,
-          samplePeriods: salesByPeriod.slice(0, 5).map(p => ({ period: p.period, revenue: p.revenue, transactions: p.transactions }))
-        });
       } else {
         // Monthly breakdown - use timezone-aware MongoDB aggregation
         const monthlyAggregation = await Transaction.aggregate([
@@ -1133,7 +1145,22 @@ export class AnalyticsService {
   private static getDateFilter(filters?: DashboardFilters, timezone: string = 'Europe/Istanbul'): any {
     if (!filters) return null;
 
-    // If date range is provided, prioritize it over custom dates
+    // If month and year are provided, use them to create a date range
+    // This takes priority over dateRange but can be overridden by explicit startDate/endDate
+    if (filters.month && filters.year && !filters.startDate && !filters.endDate) {
+      try {
+        const monthYearRange = getMonthYearRange(filters.month, filters.year, timezone);
+        return {
+          $gte: monthYearRange.start,
+          $lte: monthYearRange.end
+        };
+      } catch (error) {
+        logger.error('Error creating month/year range:', error);
+        // Fall through to other filter options
+      }
+    }
+
+    // If date range is provided, prioritize it over custom dates (unless month/year was used)
     if (filters.dateRange) {
       switch (filters.dateRange) {
         case 'today': {
@@ -1222,7 +1249,6 @@ export class AnalyticsService {
    */
   public static async getTopProducts(storeId?: string, limit: number = 10, filters?: DashboardFilters): Promise<any[]> {
     try {
-      logger.info('getTopProducts called with:', { storeId, limit, filters });
       let matchFilter: any = storeId ? { store_id: storeId } : {};
       
       // Apply filters
@@ -1254,8 +1280,6 @@ export class AnalyticsService {
         matchFilter.status = { $in: ['completed', 'pending'] }; // Include both completed and pending by default
       }
       
-      logger.info('getTopProducts final matchFilter:', matchFilter);
-      
       const topProducts = await Transaction.aggregate([
         { $match: matchFilter },
         { $unwind: '$items' },
@@ -1275,8 +1299,6 @@ export class AnalyticsService {
           _id: 0 
         }}
       ]);
-      
-      logger.info('getTopProducts aggregation result:', { count: topProducts.length, products: topProducts });
 
       return topProducts;
     } catch (error) {
@@ -1390,19 +1412,6 @@ export class AnalyticsService {
           _id: 0 
         }}
       ]);
-
-      logger.info('getSalesByMonth result:', {
-        storeId,
-        timezone,
-        dateRange: {
-          start: twelveMonthsAgo.toISOString(),
-          end: endDate.toISOString()
-        },
-        startLocal: twelveMonthsAgo.toLocaleString('en-US', { timeZone: timezone }),
-        endLocal: endDate.toLocaleString('en-US', { timeZone: timezone }),
-        monthsReturned: salesByMonth.length,
-        months: salesByMonth.map(m => m.month)
-      });
 
       return salesByMonth;
     } catch (error) {
@@ -1637,7 +1646,35 @@ export class AnalyticsService {
       let previousPeriodEnd: Date;
 
       // Determine period based on filters (same logic as calculateGrowthRate)
-      if (filters?.startDate && filters?.endDate) {
+      if (filters?.month && filters?.year) {
+        // Month/year filter - compare to previous month
+        const currentMonthRange = getMonthYearRange(filters.month, filters.year, timezone);
+        currentPeriodStart = currentMonthRange.start;
+        currentPeriodEnd = currentMonthRange.end;
+        
+        // Calculate previous month
+        let previousMonth = filters.month - 1;
+        let previousYear = filters.year;
+        
+        // Handle January (month 1) - go to December of previous year
+        if (previousMonth < 1) {
+          previousMonth = 12;
+          previousYear = filters.year - 1;
+        }
+        
+        const previousMonthRange = getMonthYearRange(previousMonth, previousYear, timezone);
+        previousPeriodStart = previousMonthRange.start;
+        previousPeriodEnd = previousMonthRange.end;
+      } else {
+            start: currentPeriodStart.toISOString(),
+            end: currentPeriodEnd.toISOString()
+          },
+          previousPeriod: {
+            start: previousPeriodStart.toISOString(),
+            end: previousPeriodEnd.toISOString()
+          }
+        });
+      } else if (filters?.startDate && filters?.endDate) {
         // Custom date range provided - calculate previous period of same duration
         currentPeriodStart = filters.startDate instanceof Date ? filters.startDate : new Date(filters.startDate);
         currentPeriodEnd = filters.endDate instanceof Date ? filters.endDate : new Date(filters.endDate);

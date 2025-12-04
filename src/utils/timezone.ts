@@ -166,6 +166,44 @@ export function getThisMonthRange(timezone: string = DEFAULT_TIMEZONE): DateRang
 }
 
 /**
+ * Create a date range for a specific month and year in the specified timezone
+ * @param month - Month number (1-12, where 1 = January)
+ * @param year - Year (e.g., 2025)
+ * @param timezone - Timezone string (default: Europe/Istanbul)
+ */
+export function getMonthYearRange(month: number, year: number, timezone: string = DEFAULT_TIMEZONE): DateRange {
+  // Month is 0-indexed in JavaScript Date, so subtract 1
+  const monthIndex = month - 1;
+  
+  // Validate month and year
+  if (month < 1 || month > 12) {
+    throw new Error(`Invalid month: ${month}. Month must be between 1 and 12.`);
+  }
+  
+  if (year < 1900 || year > 2100) {
+    throw new Error(`Invalid year: ${year}. Year must be between 1900 and 2100.`);
+  }
+  
+  // Get first day of the month at 00:00:00
+  const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
+  
+  // Get last day of the month at 23:59:59.999
+  // Using monthIndex + 1 and day 0 gives us the last day of the current month
+  const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
+  
+  logger.info(`Created month/year range for ${timezone}:`, {
+    month,
+    year,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    startLocal: start.toLocaleString('en-US', { timeZone: timezone }),
+    endLocal: end.toLocaleString('en-US', { timeZone: timezone })
+  });
+  
+  return { start, end };
+}
+
+/**
  * Create a date range for the last N days in the specified timezone
  */
 export function getLastNDaysRange(days: number, timezone: string = DEFAULT_TIMEZONE): DateRange {

@@ -50,7 +50,6 @@ router.get('/dashboard', /* dashboardRateLimit, */ asyncHandler(async (req: Requ
     if (requestCache.has(cacheKey)) {
       const cached = requestCache.get(cacheKey)!;
       if (now - cached.timestamp < CACHE_DURATION) {
-        logger.info(`Returning cached response for dashboard request: ${cacheKey}`);
         return res.json(cached.response);
       } else {
         // Remove expired cache entry
@@ -65,23 +64,15 @@ router.get('/dashboard', /* dashboardRateLimit, */ asyncHandler(async (req: Requ
       orderSource,
       status = 'all', // Changed from 'completed' to 'all' to include pending transactions by default
       startDate,
-      endDate
+      endDate,
+      month, // Month number (1-12)
+      year   // Year (e.g., 2025)
     } = req.query;
 
     // Debug timezone information for the request
     const timezone = getStoreTimezone(storeId);
     debugTimezoneInfo(startDate as string, timezone);
     
-    logger.info('Dashboard request with timezone info:', {
-      storeId,
-      timezone,
-      startDate,
-      endDate,
-      dateRange,
-      userAgent: req.get('User-Agent'),
-      ip: req.ip
-    });
-
     // Create filter object
     const filters = {
       dateRange: dateRange as string,
@@ -89,7 +80,9 @@ router.get('/dashboard', /* dashboardRateLimit, */ asyncHandler(async (req: Requ
       orderSource: orderSource as string,
       status: status as string,
       startDate: startDate ? new Date(startDate as string) : undefined,
-      endDate: endDate ? new Date(endDate as string) : undefined
+      endDate: endDate ? new Date(endDate as string) : undefined,
+      month: month ? parseInt(month as string) : undefined,
+      year: year ? parseInt(year as string) : undefined
     };
 
     const metrics = await AnalyticsService.getDashboardMetrics(storeId, filters);
@@ -98,15 +91,6 @@ router.get('/dashboard', /* dashboardRateLimit, */ asyncHandler(async (req: Requ
       success: true,
       data: metrics,
     };
-    
-    // Debug logging for frontend troubleshooting
-    logger.info('Dashboard API Response Debug:', {
-      hasRecentTransactions: !!metrics.recentTransactions,
-      recentTransactionsCount: metrics.recentTransactions?.length || 0,
-      sampleTransaction: metrics.recentTransactions?.[0] || null,
-      hasPaymentMethods: !!metrics.paymentMethods,
-      paymentMethodsData: metrics.paymentMethods || null
-    });
     
     // Cache the response for request deduplication
     requestCache.set(cacheKey, { response, timestamp: now });
@@ -242,6 +226,8 @@ router.get('/transactions', asyncHandler(async (req, res) => {
       status = 'all', // Changed from 'completed' to 'all' to include pending transactions by default
       startDate,
       endDate,
+      month, // Month number (1-12)
+      year,  // Year (e.g., 2025)
       limit = 50
     } = req.query;
 
@@ -252,7 +238,9 @@ router.get('/transactions', asyncHandler(async (req, res) => {
       orderSource: orderSource as string,
       status: status as string,
       startDate: startDate ? new Date(startDate as string) : undefined,
-      endDate: endDate ? new Date(endDate as string) : undefined
+      endDate: endDate ? new Date(endDate as string) : undefined,
+      month: month ? parseInt(month as string) : undefined,
+      year: year ? parseInt(year as string) : undefined
     };
 
     const transactions = await AnalyticsService.getFilteredTransactions(storeId, filters, parseInt(limit as string) || 50);

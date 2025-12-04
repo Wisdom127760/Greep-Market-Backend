@@ -208,3 +208,5 @@ The backend already returns full image URLs in the product response:
 Use `image.url` for the full-size modal image.
 
 
+
+

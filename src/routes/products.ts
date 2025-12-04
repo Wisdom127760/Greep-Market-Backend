@@ -181,16 +181,6 @@ router.put('/:id', uploadMultiple('images', 5), async (req: Request, res: Respon
     const newImages = req.files as Express.Multer.File[];
     const replaceImages = updateData.replace_images === 'true' || updateData.replace_images === true;
 
-    // Debug: Log raw request body to see what's being sent
-    logger.info('Raw update request body:', {
-      productId: id,
-      bodyKeys: Object.keys(updateData),
-      vatInBody: 'vat' in updateData,
-      vatValue: updateData.vat,
-      vatType: typeof updateData.vat,
-      fullBody: JSON.stringify(updateData)
-    });
-
     // Get the old product data for audit logging
     const oldProduct = await ProductService.getProductById(id);
     
@@ -222,18 +212,6 @@ router.put('/:id', uploadMultiple('images', 5), async (req: Request, res: Respon
         updateDataWithoutImages.vat = isNaN(parsedVat) ? 0 : parsedVat;
       }
     }
-    
-    // Debug logging
-    logger.info('Product update data:', {
-      productId: id,
-      vatInOriginalBody: 'vat' in updateData,
-      vatOriginalValue: updateData.vat,
-      vatInUpdateData: 'vat' in updateDataWithoutImages,
-      vatParsedValue: updateDataWithoutImages.vat,
-      vatType: typeof updateDataWithoutImages.vat,
-      updateFields: Object.keys(updateDataWithoutImages),
-      allBodyKeys: Object.keys(updateData)
-    });
     
     const product = await ProductService.updateProduct(id, updateDataWithoutImages);
   
