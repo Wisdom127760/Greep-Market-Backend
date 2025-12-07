@@ -6,9 +6,11 @@ export interface IExpense extends Document<any, any, any> {
   date: Date;
   month_year: string; // Format: "August - 2025"
   product_name: string;
+  product_id?: string; // Reference to Product if this expense is for a product
   unit: 'pieces' | 'kgs' | 'liters' | 'boxes' | 'packets' | 'other';
   quantity: number;
   amount: number;
+  cost_per_unit?: number; // Calculated cost per unit (amount / quantity)
   currency: 'TRY' | 'USD' | 'NGN' | 'EUR';
   payment_method: 'cash' | 'isbank' | 'naira' | 'card' | 'transfer' | 'other';
   category: 'food' | 'supplies' | 'utilities' | 'equipment' | 'maintenance' | 'other';
@@ -38,6 +40,11 @@ const expenseSchema = new Schema<IExpense>({
     required: true,
     trim: true,
   },
+  product_id: {
+    type: String,
+    ref: 'Product',
+    sparse: true, // Allows multiple null values but enforces uniqueness for non-null values
+  },
   unit: {
     type: String,
     enum: ['pieces', 'kgs', 'liters', 'boxes', 'packets', 'other'],
@@ -51,6 +58,11 @@ const expenseSchema = new Schema<IExpense>({
   amount: {
     type: Number,
     required: true,
+    min: 0,
+  },
+  cost_per_unit: {
+    type: Number,
+    required: false,
     min: 0,
   },
   currency: {
@@ -109,6 +121,11 @@ expenseSchema.pre('save', function(next) {
     this.month_year = `${month} - ${year}`;
   }
   
+  // Auto-calculate cost_per_unit if quantity and amount are present
+  if (this.quantity && this.quantity > 0 && this.amount) {
+    this.cost_per_unit = this.amount / this.quantity;
+  }
+  
   next();
 });
 
@@ -120,6 +137,7 @@ expenseSchema.index({ category: 1 });
 expenseSchema.index({ payment_method: 1 });
 expenseSchema.index({ created_by: 1 });
 expenseSchema.index({ product_name: 'text' }); // Text search index
+expenseSchema.index({ product_id: 1 }); // Index for product lookup
 
 // Create the model
 export const Expense = mongoose.model<IExpense>('Expense', expenseSchema);

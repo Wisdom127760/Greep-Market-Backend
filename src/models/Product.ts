@@ -5,6 +5,8 @@ export interface IProduct extends Document {
   name: string;
   description: string;
   price: number;
+  cost_price?: number; // Purchase/cost price per unit
+  markup_percentage?: number; // Markup percentage used to calculate selling price from cost
   vat?: number; // VAT percentage
   category: string;
   sku: string;
@@ -68,6 +70,17 @@ const productSchema = new Schema<IProduct>({
     type: Number,
     required: true,
     min: 0,
+  },
+  cost_price: {
+    type: Number,
+    required: false,
+    min: 0,
+  },
+  markup_percentage: {
+    type: Number,
+    required: false,
+    min: 0,
+    max: 1000, // Allow up to 1000% markup
   },
   vat: {
     type: Number,

@@ -3,6 +3,7 @@ import { body, param, query, validationResult } from 'express-validator';
 import { authenticate, authorize } from '../middleware/auth';
 import { asyncHandler } from '../middleware/errorHandler';
 import { ExpenseService } from '../services/expenseService';
+import { PriceMonitoringService } from '../services/priceMonitoringService';
 import { AuditService } from '../services/auditService';
 import { logger } from '../utils/logger';
 
@@ -204,6 +205,7 @@ router.post('/', [
   // Remove store_id validation since we'll set it automatically from the authenticated user
   body('date').isDate().withMessage('Date must be a valid date'),
   body('product_name').notEmpty().trim().withMessage('Product name is required'),
+  body('product_id').optional().isMongoId().withMessage('Invalid product ID'),
   body('unit').isIn(['pieces', 'kgs', 'liters', 'boxes', 'packets', 'other']).withMessage('Invalid unit'),
   body('quantity').isFloat({ min: 0 }).withMessage('Quantity must be a positive number'),
   body('amount').isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
@@ -230,21 +232,45 @@ router.post('/', [
       created_by: (req as any).user.id, // From auth middleware
     };
 
-    const expense = await ExpenseService.createExpense(expenseData);
+    // Create expense with price monitoring
+    const expenseResult = await ExpenseService.createExpenseWithPriceMonitoring(expenseData);
     
     // Log the expense creation
     await AuditService.logCreate(
       req,
       'EXPENSE',
-      expense._id,
-      expense.product_name
+      expenseResult._id,
+      expenseResult.product_name
     );
     
-    res.status(201).json({
+    // Prepare response with price suggestion if available
+    const response: any = {
       success: true,
-      data: expense,
+      data: expenseResult,
       message: 'Expense created successfully',
-    });
+    };
+
+    // Include price suggestion if there's a price change detected
+    if (expenseResult.priceSuggestion?.hasPriceChange) {
+      response.priceSuggestion = {
+        hasPriceChange: expenseResult.priceSuggestion.hasPriceChange,
+        product: expenseResult.priceSuggestion.product ? {
+          id: expenseResult.priceSuggestion.product._id,
+          name: expenseResult.priceSuggestion.product.name,
+          sku: expenseResult.priceSuggestion.product.sku,
+        } : undefined,
+        currentCostPrice: expenseResult.priceSuggestion.currentCostPrice,
+        newCostPrice: expenseResult.priceSuggestion.newCostPrice,
+        currentSellingPrice: expenseResult.priceSuggestion.currentSellingPrice,
+        suggestedSellingPrice: expenseResult.priceSuggestion.suggestedSellingPrice,
+        markupPercentage: expenseResult.priceSuggestion.markupPercentage,
+        priceChangePercentage: expenseResult.priceSuggestion.priceChangePercentage,
+        message: expenseResult.priceSuggestion.message,
+      };
+      response.message = 'Expense created successfully. Price change detected - please review suggestion.';
+    }
+    
+    res.status(201).json(response);
   } catch (error) {
     logger.error('Error creating expense:', error);
     res.status(500).json({
@@ -264,6 +290,7 @@ router.put('/:id', [
   param('id').isMongoId().withMessage('Invalid expense ID'),
   body('date').optional().isDate().withMessage('Date must be a valid date'),
   body('product_name').optional().notEmpty().trim().withMessage('Product name cannot be empty'),
+  body('product_id').optional().isMongoId().withMessage('Invalid product ID'),
   body('unit').optional().isIn(['pieces', 'kgs', 'liters', 'boxes', 'packets', 'other']).withMessage('Invalid unit'),
   body('quantity').optional().isFloat({ min: 0 }).withMessage('Quantity must be a positive number'),
   body('amount').optional().isFloat({ min: 0 }).withMessage('Amount must be a positive number'),
@@ -354,6 +381,103 @@ router.delete('/:id', [
     res.status(500).json({
       success: false,
       message: 'Failed to delete expense',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }));
+
+/**
+ * @route   POST /api/v1/expenses/:expenseId/update-product-price
+ * @desc    Update product price based on expense price suggestion
+ * @access  Private
+ */
+router.post('/:expenseId/update-product-price', [
+  param('expenseId').isMongoId().withMessage('Invalid expense ID'),
+  body('product_id').isMongoId().withMessage('Product ID is required'),
+  body('updateSellingPrice').optional().isBoolean().withMessage('updateSellingPrice must be a boolean'),
+], asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array(),
+      });
+    }
+
+    const { expenseId } = req.params;
+    const { product_id, updateSellingPrice = false } = req.body;
+
+    // Get the expense to retrieve cost information
+    const expense = await ExpenseService.getExpenseById(expenseId);
+    if (!expense) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expense not found',
+      });
+    }
+
+    if (!expense.cost_per_unit) {
+      return res.status(400).json({
+        success: false,
+        message: 'Expense does not have cost per unit calculated',
+      });
+    }
+
+    // Check price change to get suggested selling price
+    const priceSuggestion = await PriceMonitoringService.checkPriceChange({
+      product_id,
+      product_name: expense.product_name,
+      store_id: expense.store_id,
+      amount: expense.amount,
+      quantity: expense.quantity,
+    });
+
+    if (!priceSuggestion.hasPriceChange && !priceSuggestion.product) {
+      return res.status(400).json({
+        success: false,
+        message: priceSuggestion.message || 'No price change detected or product not found',
+      });
+    }
+
+    // Update product pricing
+    const updatedProduct = await PriceMonitoringService.updateProductPricing(
+      product_id,
+      expense.cost_per_unit,
+      updateSellingPrice,
+      priceSuggestion.suggestedSellingPrice,
+      (req as any).user.id
+    );
+
+    // Update expense to link it to the product if not already linked
+    if (!expense.product_id) {
+      await ExpenseService.updateExpense(expenseId, { product_id });
+    }
+
+    res.json({
+      success: true,
+      message: 'Product price updated successfully',
+      data: {
+        product: {
+          id: updatedProduct._id,
+          name: updatedProduct.name,
+          sku: updatedProduct.sku,
+          cost_price: updatedProduct.cost_price,
+          price: updatedProduct.price,
+          markup_percentage: updatedProduct.markup_percentage,
+        },
+        updatedFields: {
+          costPrice: expense.cost_per_unit,
+          sellingPrice: updateSellingPrice ? priceSuggestion.suggestedSellingPrice : 'not updated',
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('Error updating product price:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update product price',
       error: error instanceof Error ? error.message : 'Unknown error',
     });
   }

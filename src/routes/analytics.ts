@@ -72,7 +72,7 @@ router.get('/dashboard', /* dashboardRateLimit, */ asyncHandler(async (req: Requ
     // Debug timezone information for the request
     const timezone = getStoreTimezone(storeId);
     debugTimezoneInfo(startDate as string, timezone);
-    
+
     // Create filter object
     const filters = {
       dateRange: dateRange as string,

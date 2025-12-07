@@ -1,11 +1,13 @@
 import { Expense, IExpense } from '../models/Expense';
 import { logger } from '../utils/logger';
 import { getStoreTimezone, formatDateForTimezone } from '../utils/timezone';
+import { PriceMonitoringService, PriceChangeSuggestion } from './priceMonitoringService';
 
 export interface CreateExpenseData {
   store_id: string;
   date: Date;
   product_name: string;
+  product_id?: string; // Optional product ID to link expense to product
   unit: 'pieces' | 'kgs' | 'liters' | 'boxes' | 'packets' | 'other';
   quantity: number;
   amount: number;
@@ -21,6 +23,7 @@ export interface CreateExpenseData {
 export interface UpdateExpenseData {
   date?: Date;
   product_name?: string;
+  product_id?: string;
   unit?: 'pieces' | 'kgs' | 'liters' | 'boxes' | 'packets' | 'other';
   quantity?: number;
   amount?: number;
@@ -38,9 +41,11 @@ export interface ExpenseResponse {
   date: Date;
   month_year: string;
   product_name: string;
+  product_id?: string;
   unit: string;
   quantity: number;
   amount: number;
+  cost_per_unit?: number;
   currency: string;
   payment_method: string;
   category: string;
@@ -50,6 +55,10 @@ export interface ExpenseResponse {
   created_by: string;
   created_at: Date;
   updated_at: Date;
+}
+
+export interface ExpenseResponseWithPriceSuggestion extends ExpenseResponse {
+  priceSuggestion?: PriceChangeSuggestion;
 }
 
 export interface ExpenseStats {
@@ -244,8 +253,21 @@ export class ExpenseService {
       ];
       const monthYear = `${monthNames[date.getMonth()]} - ${date.getFullYear()}`;
 
+      // Try to find and link product if not already linked
+      let productId = expenseData.product_id;
+      if (!productId) {
+        const match = await PriceMonitoringService.findMatchingProduct({
+          product_name: expenseData.product_name,
+          store_id: expenseData.store_id,
+        });
+        if (match && match.matched) {
+          productId = match.product._id.toString();
+        }
+      }
+
       const expense = new Expense({
         ...expenseData,
+        product_id: productId,
         month_year: monthYear,
         currency: expenseData.currency || 'TRY',
         category: expenseData.category || 'other',
@@ -255,6 +277,36 @@ export class ExpenseService {
       return this.formatExpenseResponse(expense);
     } catch (error) {
       logger.error('Error creating expense:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create a new expense with price monitoring
+   * Returns expense along with price change suggestions
+   */
+  static async createExpenseWithPriceMonitoring(
+    expenseData: CreateExpenseData
+  ): Promise<ExpenseResponseWithPriceSuggestion> {
+    try {
+      // Create the expense first
+      const expense = await this.createExpense(expenseData);
+
+      // Check for price changes and get suggestions
+      const priceSuggestion = await PriceMonitoringService.checkPriceChange({
+        product_id: expense.product_id,
+        product_name: expenseData.product_name,
+        store_id: expenseData.store_id,
+        amount: expenseData.amount,
+        quantity: expenseData.quantity,
+      });
+
+      return {
+        ...expense,
+        priceSuggestion,
+      };
+    } catch (error) {
+      logger.error('Error creating expense with price monitoring:', error);
       throw error;
     }
   }
@@ -604,9 +656,11 @@ export class ExpenseService {
       date: expense.date,
       month_year: expense.month_year,
       product_name: expense.product_name,
+      product_id: expense.product_id,
       unit: expense.unit,
       quantity: expense.quantity,
       amount: expense.amount,
+      cost_per_unit: expense.cost_per_unit,
       currency: expense.currency,
       payment_method: expense.payment_method,
       category: expense.category,

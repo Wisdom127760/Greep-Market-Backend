@@ -78,6 +78,18 @@ export interface DashboardMetrics {
     amount: number;
     count: number;
   }>;
+  // DEBUG: Include the date range used for transparency
+  _filterInfo?: {
+    dateRange: {
+      start: string;
+      end: string;
+    };
+    filters: {
+      month?: number;
+      year?: number;
+      dateRange?: string;
+    };
+  };
 }
 
 export interface SalesAnalytics {
@@ -1665,15 +1677,6 @@ export class AnalyticsService {
         const previousMonthRange = getMonthYearRange(previousMonth, previousYear, timezone);
         previousPeriodStart = previousMonthRange.start;
         previousPeriodEnd = previousMonthRange.end;
-      } else {
-            start: currentPeriodStart.toISOString(),
-            end: currentPeriodEnd.toISOString()
-          },
-          previousPeriod: {
-            start: previousPeriodStart.toISOString(),
-            end: previousPeriodEnd.toISOString()
-          }
-        });
       } else if (filters?.startDate && filters?.endDate) {
         // Custom date range provided - calculate previous period of same duration
         currentPeriodStart = filters.startDate instanceof Date ? filters.startDate : new Date(filters.startDate);

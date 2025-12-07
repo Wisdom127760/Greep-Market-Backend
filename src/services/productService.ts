@@ -10,6 +10,8 @@ export interface CreateProductData {
   name: string;
   description: string;
   price: number;
+  cost_price?: number;
+  markup_percentage?: number;
   vat?: number;
   category: string;
   sku: string;
